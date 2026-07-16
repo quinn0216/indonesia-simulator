@@ -10,53 +10,50 @@ st.set_page_config(layout="wide")
 st.title("🇮🇩 인도네시아 주별 환경탄력성 지수 시뮬레이터")
 st.markdown("가중치를 조절하면 우측 지도의 주별 색상과 좌측 랭킹이 실시간으로 시각화됩니다.")
 
-@st.cache_data
+# 캐시 사용 중지 - 실시간으로 무조건 파일에서 새로 읽어옴
 def load_perfect_data():
     # 1. 기온 데이터 로드 (data.xlsx)
     try:
         df_temp = pd.read_excel("data.xlsx")
-        # 열 이름의 모든 줄바꿈, 공백, 특수기호 제거하여 비교용 표준화 열 이름 생성
-        original_cols = list(df_temp.columns)
-        clean_cols = [str(c).replace('\r', '').replace('\n', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '') for c in original_cols]
-        df_temp.columns = clean_cols
+        # 모든 줄바꿈, 공백 제거
+        df_temp.columns = [str(c).replace('\r', '').replace('\n', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '') for c in df_temp.columns]
     except Exception as e:
         st.error(f"data.xlsx 로드 실패: {e}")
         st.stop()
     
     df = pd.DataFrame()
     
-    # Province 열 추출
+    # Province 열 명시적으로 가져오기
     if 'Province' in df_temp.columns:
         df['Province'] = df_temp['Province'].astype(str).str.strip()
     else:
-        df['Province'] = df_temp.iloc[:, 0].astype(str).str.strip()
+        # Province가 없을 경우 수동 지정
+        df['Province'] = df_temp[df_temp.columns[0]].astype(str).str.strip()
         
-    # 'Change(2025-2007)' 컬럼 정확히 매핑 (특수문자 제거 버전: 'Change20252007')
+    # 'Change (2025-2007)' 컬럼 정확히 매핑 (특수문자 제거 후 비교)
     if 'Change20252007' in df_temp.columns:
         df['Temp_Change'] = pd.to_numeric(df_temp['Change20252007'], errors='coerce')
     elif '기온변화율%' in df_temp.columns:
         df['Temp_Change'] = pd.to_numeric(df_temp['기온변화율%'], errors='coerce')
     else:
-        # 혹시 못 찾을 경우 숫자가 많이 섞인 4번째 열 강제 지정
-        df['Temp_Change'] = pd.to_numeric(df_temp.iloc[:, 3], errors='coerce')
+        # 컬럼 중 맨 끝 컬럼 지정
+        df['Temp_Change'] = pd.to_numeric(df_temp[df_temp.columns[-1]], errors='coerce')
 
     # 2. 변수 데이터 로드 (variables.xlsx)
     try:
         df_vars = pd.read_excel("variables.xlsx")
-        # variables 열 이름도 동일하게 표준화 처리하여 줄바꿈/공백 제거
         df_vars.columns = [str(c).replace('\r', '').replace('\n', '').replace(' ', '').replace('_', '') for c in df_vars.columns]
         
-        # 데이터 병합을 위한 조인 키 매핑 (공백 없이 소문자 변환)
+        # 조인용 키 생성
         df_vars['Join_Key'] = df_vars['Province'].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
         df['Join_Key'] = df['Province'].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
         
-        # 'GDP_2025' -> 'GDP2025' 등으로 변경된 컬럼에서 값 추출 및 변화량 직접 계산
+        # 변화율 직접 연산
         g2007 = pd.to_numeric(df_vars['GDP2007'], errors='coerce')
         g2025 = pd.to_numeric(df_vars['GDP2025'], errors='coerce')
         p2007 = pd.to_numeric(df_vars['Poverty2007'], errors='coerce')
         p2025 = pd.to_numeric(df_vars['Poverty2025'], errors='coerce')
         
-        # 변화량 직접 산출
         df_vars['GDP_diff'] = g2025 - g2007
         df_vars['Poverty_diff'] = p2025 - p2007
         
@@ -68,14 +65,14 @@ def load_perfect_data():
         
         df = pd.merge(df, var_subset, on='Join_Key', how='left')
     except Exception as e:
-        st.error(f"variables.xlsx 처리 실패: {e}\n\n식별된 실제 컬럼명: {list(df_vars.columns) if 'df_vars' in locals() else '파일 없음'}")
+        st.error(f"variables.xlsx 처리 실패: {e}")
         st.stop()
 
-    # 데이터 최종 정제 (행 레이블 및 불필요한 누계 행 필터링)
+    # 데이터 최종 필터링 및 찌꺼기 행 완벽 제거
     df = df[df['Province'].notna() & (df['Province'] != '')]
     df = df[~df['Province'].astype(str).str.contains("행레이블|행 레이블|Total|합계|None|nan|Province|province", case=False, na=False)]
     
-    # 결측치 보정 (값이 비어 있는 주 대비)
+    # 결측치 보정
     df['GDP_val'] = df['GDP_val'].fillna(0)
     df['Pov_val'] = df['Pov_val'].fillna(0)
     df['Temp_Change'] = df['Temp_Change'].fillna(0.5)
@@ -106,12 +103,12 @@ st.sidebar.header("⚙️ 가중치 설정")
 alpha = st.sidebar.slider("1인당 GDP 가중치 (a)", 0.0, 1.0, 0.6, 0.1)
 gamma = st.sidebar.slider("빈곤율 제약 가중치 (c)", 0.0, 1.0, 0.4, 0.1)
 
-# BCPI 및 환경탄력성지수(ETI) 계산
+# 공식 연산 (BCPI 및 ETI)
 df['BCPI'] = (alpha * df['GDP_norm']) - (gamma * df['Poverty_norm'])
 df['ETI'] = df['BCPI'] / (df['Temp_Change'].abs() + 1e-5)
 df['순위'] = df['ETI'].rank(ascending=False, method='min').astype(int)
 
-# 레이아웃 배치
+# 화면 레이아웃 구성
 col1, col2 = st.columns([4, 6])
 
 with col1:
