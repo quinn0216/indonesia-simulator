@@ -117,7 +117,7 @@ df['BCPI'] = (alpha * df['GDP_norm']) - (gamma * df['Poverty_norm'])
 df['ETI'] = df['BCPI'] / (df['Temp_Change'].abs() + 1e-5)
 df['순위'] = df['ETI'].rank(ascending=False, method='min').astype(int)
 
-# GeoJSON의 NAME_1과 맞추기 위해 타이틀 케이스로 변경 (예: sumatera utara -> Sumatera Utara)
+# GeoJSON의 NAME_1과 맞추기 위해 타이틀 케이스로 변경
 df['Geo_Province'] = df['Province'].astype(str).str.title().str.strip()
 
 # 화면 레이아웃
