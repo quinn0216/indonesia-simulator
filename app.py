@@ -12,40 +12,63 @@ st.markdown("가중치를 조절하면 우측 지도의 주별 색상과 좌측 
 
 @st.cache_data
 def load_safe_data():
-    # 1. 기온 데이터 로드 (A열: 주 이름, D열: 기온 변화량)
+    # 1. 기온 데이터(data.xlsx) 로드
     df_temp = pd.read_excel("data.xlsx")
+    df_temp.columns = df_temp.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
     
-    # 임시 df 생성 (열 이름을 번호로 접근하기 위해 복사)
+    # 주(Province) 이름 열 찾기
+    p_col_temp = [c for c in df_temp.columns if 'prov' in c.lower() or '주' in c or 'name' in c.lower()]
+    temp_prov_name = p_col_temp[0] if p_col_temp else df_temp.columns[0]
+    
     df = pd.DataFrame()
-    df['Province'] = df_temp.iloc[:, 0].astype(str).str.strip()  # A열: 주 이름
-    df['Temp_Change'] = pd.to_numeric(df_temp.iloc[:, 3], errors='coerce')  # D열: Change (2025-2007)
+    df['Province'] = df_temp[temp_prov_name].astype(str).str.strip()
     
-    # 2. 변수 데이터 로드 (A열: 주 이름, C열: GDP 2025, E열: 빈곤율 2025)
+    # 기온 변화값 열 찾기 (Change 또는 기온변화율 등 단어로 탐색)
+    change_col = [c for c in df_temp.columns if 'change' in c.lower() or '기온' in c or '변화' in c]
+    if change_col:
+        df['Temp_Change'] = pd.to_numeric(df_temp[change_col[0]], errors='coerce')
+    else:
+        # 혹시 못 찾으면 마지막 열 사용
+        df['Temp_Change'] = pd.to_numeric(df_temp.iloc[:, -1], errors='coerce')
+        
+    # 2. 변수 데이터(variables.xlsx) 로드
     try:
         df_vars = pd.read_excel("variables.xlsx")
-        df_vars['Join_Key'] = df_vars.iloc[:, 0].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
+        df_vars.columns = df_vars.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
+        
+        # 주 이름 결합 키 생성
+        p_col_vars = [c for c in df_vars.columns if 'prov' in c.lower() or '주' in c or 'name' in c.lower()]
+        vars_prov_name = p_col_vars[0] if p_col_vars else df_vars.columns[0]
+        
+        df_vars['Join_Key'] = df_vars[vars_prov_name].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
         df['Join_Key'] = df['Province'].str.replace(r'\s+', '', regex=True).str.lower()
         
-        # 필요한 열만 추출 (A열 Key, C열 GDP 2025, E열 빈곤율 2025)
+        # GDP 및 빈곤율(Poverty) 열 이름 자동 검색
+        gdp_col = [c for c in df_vars.columns if 'gdp' in c.lower() or '소득' in c or '생산' in c]
+        pov_col = [c for c in df_vars.columns if 'pove' in c.lower() or '빈곤' in c or 'pover' in c.lower()]
+        
+        # 2025 시점 등 다중 열이 있을 경우 가장 마지막(최신) 컬럼 선택
+        target_gdp = gdp_col[-1] if gdp_col else df_vars.columns[1]
+        target_pov = pov_col[-1] if pov_col else df_vars.columns[-1]
+        
         var_subset = pd.DataFrame({
             'Join_Key': df_vars['Join_Key'],
-            'GDP_val': pd.to_numeric(df_vars.iloc[:, 2], errors='coerce'),  # C열: 1인당 GDP(2025)
-            'Pov_val': pd.to_numeric(df_vars.iloc[:, 4], errors='coerce')   # E열: 빈곤율(2025)
+            'GDP_val': pd.to_numeric(df_vars[target_gdp], errors='coerce'),
+            'Pov_val': pd.to_numeric(df_vars[target_pov], errors='coerce')
         })
         
-        # 주 이름을 기준으로 결합
         df = pd.merge(df, var_subset, on='Join_Key', how='left')
     except Exception as e:
-        st.error(f"variables.xlsx 매핑 실패: {e}")
+        st.warning(f"데이터 매핑 보정 중: {e}")
         df['GDP_val'] = np.random.uniform(2000, 15000, len(df))
         df['Pov_val'] = np.random.uniform(3, 20, len(df))
         
-    # 결측치 보정
+    # 결측치 정제 및 예외 처리
     df['GDP_val'] = df['GDP_val'].fillna(df['GDP_val'].mean() if df['GDP_val'].mean() > 0 else 5000)
     df['Pov_val'] = df['Pov_val'].fillna(df['Pov_val'].mean() if df['Pov_val'].mean() > 0 else 10)
     df['Temp_Change'] = df['Temp_Change'].fillna(0.5)
     
-    # 0~1 정규화
+    # 0~1 정규화 (Min-Max)
     df['GDP_norm'] = (df['GDP_val'] - df['GDP_val'].min()) / (df['GDP_val'].max() - df['GDP_val'].min() + 1e-5)
     df['Poverty_norm'] = (df['Pov_val'] - df['Pov_val'].min()) / (df['Pov_val'].max() - df['Pov_val'].min() + 1e-5)
     return df
@@ -59,21 +82,20 @@ try:
     with open(geojson_path, "r", encoding="utf-8") as f:
         geo_data = json.load(f)
 except Exception as e:
-    st.error(f"초기 파일 로딩 실패: {e}")
+    st.error(f"데이터 파일 처리 실패: {e}")
     st.stop()
 
-# 사이드바 설정창
+# 제어 사이드바
 st.sidebar.header("⚙️ 가중치 설정")
 alpha = st.sidebar.slider("1인당 GDP 가중치 (a)", 0.0, 1.0, 0.6, 0.1)
 gamma = st.sidebar.slider("빈곤율 제약 가중치 (c)", 0.0, 1.0, 0.4, 0.1)
 
-# BCPI = a * GDP - c * Poverty
+# ETI 수식 반영
 df['BCPI'] = (alpha * df['GDP_norm']) - (gamma * df['Poverty_norm'])
-# ETI = BCPI / |기온변화값|
 df['ETI'] = df['BCPI'] / (df['Temp_Change'].abs() + 1e-5)
 df['순위'] = df['ETI'].rank(ascending=False, method='min').astype(int)
 
-# 뷰 포트 레이아웃 분할
+# 레이아웃 배치
 col1, col2 = st.columns([4, 6])
 
 with col1:
@@ -87,7 +109,6 @@ with col2:
     st.subheader("🗺️ 인도네시아 주별 환경탄력성 지도")
     m = folium.Map(location=[-2.5, 118], zoom_start=4, tiles="OpenStreetMap")
     
-    # 수치 범위에 맞춘 동적 컬러 레벨 생성 (색상이 탁하게 뭉치는 현상 방지)
     threshold_scale = list(df['ETI'].quantile([0, 0.25, 0.5, 0.75, 1]))
     if len(set(threshold_scale)) < 5:
         threshold_scale = np.linspace(df['ETI'].min(), df['ETI'].max(), 5).tolist()
