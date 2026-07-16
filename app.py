@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import folium
 import json
+import os
 from streamlit_folium import st_folium
 
 st.set_page_config(layout="wide")
@@ -41,7 +42,7 @@ def load_and_merge_data():
     df['GDP_val'] = df[gdp_col[0]] if gdp_col else np.random.uniform(2000, 15000, len(df))
     df['Pov_val'] = df[pov_col[0]] if pov_col else np.random.uniform(3, 20, len(df))
     
-    # 0~1 정규화 (최소-최대 스케일링)
+    # 0~1 정규화
     df['GDP_norm'] = (df['GDP_val'] - df['GDP_val'].min()) / (df['GDP_val'].max() - df['GDP_val'].min() + 1e-5)
     df['Poverty_norm'] = (df['Pov_val'] - df['Pov_val'].min()) / (df['Pov_val'].max() - df['Pov_val'].min() + 1e-5)
     return df
@@ -49,11 +50,15 @@ def load_and_merge_data():
 try:
     df = load_and_merge_data()
     
-    # GeoJSON 파일 로드
-    with open("indonesia.geojson", "r", encoding="utf-8") as f:
+    # 확장자가 .geojson이든 .geojson.json이든 알아서 찾아서 읽도록 수정
+    geojson_path = "indonesia.geojson"
+    if not os.path.exists(geojson_path) and os.path.exists("indonesia.geojson.json"):
+        geojson_path = "indonesia.geojson.json"
+        
+    with open(geojson_path, "r", encoding="utf-8") as f:
         geo_data = json.load(f)
 except Exception as e:
-    st.error(f"파일을 읽는 중 오류가 발생했습니다. 모든 파일이 최상위 경로에 업로드 되었는지 확인하세요: {e}")
+    st.error(f"파일 로드 오류: {e}")
     st.stop()
 
 # 레이아웃 구성: 사이드바 제어판
@@ -66,7 +71,7 @@ df['BCPI'] = (alpha * df['GDP_norm']) - (gamma * df['Poverty_norm'])
 df['ETI'] = df['BCPI'] / (df['Temp_Change'].abs() + 1e-5)
 df['순위'] = df['ETI'].rank(ascending=False, method='min').astype(int)
 
-# 메인 화면 레이아웃 분할 (좌측 표 / 우측 지도)
+# 화면 레이아웃 분할
 col1, col2 = st.columns([4, 6])
 
 with col1:
@@ -77,17 +82,14 @@ with col1:
 
 with col2:
     st.subheader("🗺️ 인도네시아 주별 환경탄력성 지도")
-    
-    # 기본 지도 중심 설정 (인도네시아 중앙)
     m = folium.Map(location=[-2.5, 118], zoom_start=4, tiles="OpenStreetMap")
     
-    # 계산된 ETI 값을 지도 경계면에 실시간 매핑 및 시각화
     folium.Choropleth(
         geo_data=geo_data,
         name="환경탄력성지수(ETI)",
         data=df,
         columns=["Province", "ETI"],
-        key_on="feature.properties.NAME_1",  # GADM level 1 기준 주 이름 매핑 키
+        key_on="feature.properties.NAME_1",  # GADM 기준 매핑 키
         fill_color="YlOrRd",
         fill_opacity=0.7,
         line_opacity=0.2,
