@@ -15,19 +15,19 @@ def load_perfect_data():
     # 1. 기온 데이터 로드
     try:
         df_temp = pd.read_excel("data.xlsx")
-        df_temp.columns = df_temp.columns.astype(str).str.replace(r'[\r\n\s]+', '', regex=True)
+        # 모든 열 이름을 무조건 문자열로 변환한 후 공백/줄바꿈 제거
+        df_temp.columns = [str(c).replace('\r', '').replace('\n', '').replace(' ', '') for c in df_temp.columns]
     except Exception as e:
         st.error(f"data.xlsx 로드 실패: {e}")
         st.stop()
     
     df = pd.DataFrame()
     
-    # [핵심 수정] 숫자가 아닌 "진짜 텍스트(주 이름)"가 가장 많이 들어있는 열을 주 이름(Province) 열로 자동 지정
+    # 숫자가 아닌 문자열이 가장 많이 들어있는 열을 주 이름(Province) 열로 자동 지정
     prov_col = None
     for col in df_temp.columns:
-        # 해당 열에서 숫자가 아닌 문자열의 비율 계산
+        # 무조건 문자열로 변환한 값들의 패턴 검사
         non_numeric_ratio = df_temp[col].astype(str).apply(lambda x: not x.replace('.','',1).isdigit()).mean()
-        # '행레이블'이나 'total' 같은 제어용 텍스트 제외하고 가장 문자열 비율이 높은 열 선택
         if non_numeric_ratio > 0.7:
             prov_col = col
             break
@@ -37,12 +37,11 @@ def load_perfect_data():
     else:
         df['Province'] = df_temp.iloc[:, 0].astype(str).str.strip()
         
-    # 'Change' 또는 '기온', '변화' 단어가 포함된 열을 기온 변화량으로 매핑 (나머지 중 숫자 열)
-    change_cols = [c for c in df_temp.columns if 'change' in c.lower() or '기온' in c or '변화' in c]
+    # 기온 변화량 열 자동 탐색
+    change_cols = [c for c in df_temp.columns if 'change' in str(c).lower() or '기온' in str(c) or '변화' in str(c)]
     if change_cols:
         df['Temp_Change'] = pd.to_numeric(df_temp[change_cols[0]], errors='coerce')
     else:
-        # 문자열이 아닌 열들 중 하나 선택
         numeric_cols = [c for c in df_temp.columns if c != prov_col]
         df['Temp_Change'] = pd.to_numeric(df_temp[numeric_cols[-1]], errors='coerce')
 
@@ -53,9 +52,10 @@ def load_perfect_data():
 
     try:
         df_vars = pd.read_excel(var_file)
-        df_vars.columns = df_vars.columns.astype(str).str.replace(r'[\r\n\s]+', '', regex=True)
+        # 모든 열 이름을 문자열화시킨 후 가공하여 타입 에러('float' has no replace) 완벽 방어!
+        df_vars.columns = [str(c).replace('\r', '').replace('\n', '').replace(' ', '') for c in df_vars.columns]
         
-        # variables 안에서도 진짜 텍스트(주 이름)가 들어있는 열 찾기
+        # 주 이름 컬럼 찾기
         var_prov_col = None
         for col in df_vars.columns:
             non_numeric_ratio = df_vars[col].astype(str).apply(lambda x: not x.replace('.','',1).isdigit()).mean()
@@ -66,11 +66,10 @@ def load_perfect_data():
         vars_prov_name = var_prov_col if var_prov_col else df_vars.columns[0]
         
         df_vars['Join_Key'] = df_vars[vars_prov_name].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
-        df['Join_Key'] = df['Province'].str.replace(r'\s+', '', regex=True).str.lower()
+        df['Join_Key'] = df['Province'].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
         
-        # GDP 및 Poverty 열 자동 매핑
-        gdp_cols = [c for c in df_vars.columns if 'gdp' in c.lower()]
-        pov_cols = [c for c in df_vars.columns if 'pove' in c.lower() or '빈곤' in c]
+        gdp_cols = [c for c in df_vars.columns if 'gdp' in str(c).lower()]
+        pov_cols = [c for c in df_vars.columns if 'pove' in str(c).lower() or '빈곤' in str(c)]
         
         target_gdp_col = gdp_cols[-1] if gdp_cols else df_vars.columns[-1]
         target_pov_col = pov_cols[-1] if pov_cols else df_vars.columns[-1]
@@ -86,11 +85,11 @@ def load_perfect_data():
         df['GDP_val'] = np.nan
         df['Pov_val'] = np.nan
 
-    # 데이터 최종 필터링 (행 레이블, 합계, 빈 값 완벽 제거)
+    # 데이터 최종 필터링 및 찌꺼기 행 완벽 제거
     df = df[df['Province'].notna() & (df['Province'] != '')]
     df = df[~df['Province'].astype(str).str.contains("행레이블|행 레이블|Total|합계|None|nan|Province|province", case=False, na=False)]
     
-    # Province 자리에 혹시라도 들어간 완전한 실수형 숫자 행 제거
+    # Province 자리에 들어간 완전한 실수형 숫자 행 제거
     def is_float(val):
         try:
             float(val)
@@ -99,7 +98,7 @@ def load_perfect_data():
             return False
     df = df[~df['Province'].apply(is_float)]
     
-    # 결측치 디폴트 보정
+    # 결측치 수치 보정
     df['GDP_val'] = df['GDP_val'].fillna(5000)
     df['Pov_val'] = df['Pov_val'].fillna(10)
     df['Temp_Change'] = df['Temp_Change'].fillna(0.5)
@@ -167,4 +166,4 @@ with col2:
         legend_name="환경탄력성지수 (ETI)",
     ).add_to(m)
     
-    st_folium(m, width="100%", height=500)
+    st_folium(m, width="100%", height=500
