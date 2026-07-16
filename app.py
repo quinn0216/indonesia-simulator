@@ -166,4 +166,5 @@ with col2:
         legend_name="환경탄력성지수 (ETI)",
     ).add_to(m)
     
-    st_folium(m, width="100%", height=500
+    st_folium(m, width="100%", height=500)
+    
